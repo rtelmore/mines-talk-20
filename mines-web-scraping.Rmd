@@ -1,0 +1,148 @@
+---
+title: "Web Scraping in R"
+author: "Ryan Elmore"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, warning = FALSE, message = FALSE}
+library(rvest)
+library(dplyr)
+library(janitor)
+```
+
+## Roster
+
+We can read in all of the tables, i.e. tables that are actually using the table
+tag in the html, using the following R code. We can do this with three lines of
+R code. We specify a url, use the `read_html()` function (this is similar to 
+using a web browser), and then isolate all of the tables (w/ table tag). 
+
+```{r}
+url <- "http://www.hockey-reference.com/teams/COL/2020.html"
+tb <- xml2::read_html(url) %>%
+  rvest::html_table()
+```
+
+Note that the first table on this page does not have a table tag. And we need to
+know these things if we want to pick off the roster table, the third element of
+this list (`tb[[3]]`). Alternatively, we can use a tool like
+[SelectorGadget](https://selectorgadget.com) or the developer tools in your 
+browser in order to find the CSS or XPath tags associated with the table of 
+interest.
+
+```{r}
+tb_2 <- xml2::read_html(url) %>%
+  rvest::html_node(css = '#roster') %>%
+  rvest::html_table() 
+```
+
+```{r}
+tb_2 <- xml2::read_html(url) %>%
+  rvest::html_node(xpath = '//*[(@id = "roster")]') %>%
+  rvest::html_table() 
+```
+
+Do you need to know what xpath or CSS actually is? No! You just need to know how
+to find out what they are for certain problems/tables. 
+
+## Get Player Links
+
+```{r}
+links <- xml2::read_html(url) %>%
+  rvest::html_nodes(xpath = '//*[(@id = "roster")]//a') %>%
+  rvest::html_attr('href')
+links
+```
+
+Append the links to the `tb2`. 
+
+```{r}
+tb_2 <- tb_2 %>% 
+  dplyr::mutate(., player_links = links)
+```
+
+Why is this useful? Suppose we want to scrape all player statistics for a given 
+team. Consider [Nathan MacKinnon](https://www.hockey-reference.com/players/m/mackina01.html). We can 
+append his link to the base URL can programmatically obtain his statistics. It's
+good practice to check your url to make sure it's a legitimate url before 
+debugging other parts of your code. 
+
+```{r}
+url <- paste("https://www.hockey-reference.com", links[22], sep = "")
+mac_tb <- xml2::read_html(url) %>% 
+  rvest::html_table() %>% 
+  .[[1]]
+```
+
+Note that tables don't always come into R (or python or whatever) in exactly the
+form that you might expect. You will usually need to clean it up or post-process
+the table. Two super useful packages for cleaning data are `janitor` and 
+`dplyr`, among many others.
+
+```{r}
+names(mac_tb) <- mac_tb[1, ]
+mac_tb <- mac_tb %>% 
+  janitor::clean_names() %>% 
+  dplyr::filter(!(season %in% c("Season", "Career")))
+```
+
+## Game Logs
+
+What if we want MacKinnon's statistics on a game-by-game basis rather than 
+aggregated by year. Here are the [game logs](https://www.hockey-reference.com/players/m/mackina01/gamelog/2020). The 
+url has a different form than the season logs, but it's similar.
+
+```{r}
+game_log_url <- gsub(".html", "/gamelog/2020", url)
+mac_gl_tb <- xml2::read_html(game_log_url) %>% 
+  rvest::html_table() %>% 
+  .[[1]]
+```
+
+Again, you need to clean this stuff up. 
+
+## Iterators/Functions
+
+Suppose you want the team roster information for all teams from 2015 - 2019. You 
+will likely want to automate this process. I intentionally will not include 2020
+here because they added two columns to the most recent results. 
+
+```{r}
+get_nhl_roster <- function(year, team){
+  url <- paste("http://www.hockey-reference.com/teams/", 
+               team, "/", year, ".html", sep = "")
+  tb <- xml2::read_html(url) %>%
+    rvest::html_table() %>% 
+    .[[3]]
+  return(tb)
+}
+
+col_19_df <- get_nhl_roster(2019, "COL")
+```
+
+```{r, cache = T}
+teams <- c("COL", "DAL")
+years <- 2015:2019
+for(i in seq_along(teams)){
+  for(j in seq_along(years)){
+    tb <- get_nhl_roster(years[j], teams[i]) %>% 
+      mutate(team = teams[i], 
+             year = years[j])
+    if(exists("results")){
+      results <- rbind(results, tb)
+    } else (results <- tb)
+  }
+}
+head(results)
+```
+
+
+
+
+
+
